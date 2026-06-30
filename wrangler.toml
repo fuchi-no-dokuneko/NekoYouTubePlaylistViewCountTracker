@@ -1,0 +1,3 @@
+name = "neko-youtube-playlist-view-count-tracker"
+pages_build_output_dir = "."
+compatibility_date = "2026-06-30"

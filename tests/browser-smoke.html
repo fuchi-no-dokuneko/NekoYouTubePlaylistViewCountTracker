@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><title>RUNNING</title></head><body><iframe id="app" src="../index.html" hidden></iframe><pre id="result">RUNNING</pre><script>
+const frame=document.getElementById("app"); frame.addEventListener("load",()=>{try{const api=frame.contentWindow.NekoPlaylist;const checks=[
+["plain playlist id",api.parsePlaylistId("PL1234567890abc")==="PL1234567890abc"],
+["playlist URL",api.parsePlaylistId("https://www.youtube.com/playlist?list=PL1234567890abc")==="PL1234567890abc"],
+["chart initialized",frame.contentDocument.getElementById("chart").width>0],
+["credentials not stored",!Object.keys(frame.contentWindow.localStorage).length]
+];const ok=checks.every(x=>x[1]);document.getElementById("result").textContent=(ok?"PASS":"FAIL")+"\n"+checks.map(x=>(x[1]?"PASS ":"FAIL ")+x[0]).join("\n");document.title=ok?"PASS":"FAIL"}catch(error){document.getElementById("result").textContent="FAIL\n"+error.stack;document.title="FAIL"}},{once:true});
+</script></body></html>

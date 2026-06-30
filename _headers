@@ -1,0 +1,5 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; connect-src https://www.googleapis.com; img-src 'self' https://i.ytimg.com data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'

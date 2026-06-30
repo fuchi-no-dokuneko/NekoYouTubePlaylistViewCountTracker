@@ -1,0 +1,38 @@
+name: Cloudflare Pages
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --check app.js
+      - name: Browser smoke test
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 >/tmp/server.log 2>&1 &
+          trap 'kill $!' EXIT
+          for attempt in {1..20}; do curl -fsS http://127.0.0.1:8765/tests/browser-smoke.html >/dev/null && break; sleep .2; done
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          "$browser" --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=5000 --dump-dom http://127.0.0.1:8765/tests/browser-smoke.html >/tmp/smoke.html
+          grep '<pre id="result">PASS' /tmp/smoke.html
+  deploy:
+    needs: validate
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: config
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECT: ${{ vars.CLOUDFLARE_PROJECT_NAME }}
+        run: |
+          if [ -n "$TOKEN" ] && [ -n "$ACCOUNT" ]; then echo configured=true >>"$GITHUB_OUTPUT"; echo "project=${PROJECT:-neko-youtube-playlist-view-count-tracker}" >>"$GITHUB_OUTPUT"; else echo configured=false >>"$GITHUB_OUTPUT"; fi
+      - if: steps.config.outputs.configured == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy . --project-name=${{ steps.config.outputs.project }}

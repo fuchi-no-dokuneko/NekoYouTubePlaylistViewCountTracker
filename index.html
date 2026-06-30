@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src https://www.googleapis.com; img-src 'self' https://i.ytimg.com data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Neko Playlist View Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div><span class="mark">NP</span><strong>Neko Playlist View Tracker</strong></div>
+    <span class="privacy">Browser to Google API only</span>
+  </header>
+  <main>
+    <section class="intro">
+      <div><h1>Playlist view counts</h1><p>Inspect every public video in a YouTube playlist and calculate totals without a server.</p></div>
+      <div class="connection"><span></span> API key stays in this tab</div>
+    </section>
+    <section class="query" aria-label="Playlist query">
+      <label>Playlist URL or ID<input id="playlist" placeholder="https://www.youtube.com/playlist?list=..." autocomplete="off"></label>
+      <label>YouTube Data API key<input id="apiKey" type="password" placeholder="AIza..." autocomplete="off"></label>
+      <button id="load" type="button">Load playlist</button>
+      <button id="cancel" type="button" disabled>Cancel</button>
+      <button id="export" type="button" disabled>Export CSV</button>
+    </section>
+    <div id="status" class="status" role="status">Enter a playlist and API key.</div>
+    <section class="metrics" aria-label="Playlist totals">
+      <div><span>Videos</span><strong id="videoCount">0</strong></div>
+      <div><span>Total views</span><strong id="totalViews">0</strong></div>
+      <div><span>Average</span><strong id="averageViews">0</strong></div>
+      <div><span>Unavailable</span><strong id="unavailableCount">0</strong></div>
+    </section>
+    <section class="chart-section">
+      <div class="section-title"><h2>Top videos</h2><span>Views, log scale</span></div>
+      <canvas id="chart" width="1200" height="360" aria-label="Top video view chart"></canvas>
+    </section>
+    <section class="table-section">
+      <div class="section-title"><h2>Playlist rows</h2><span id="tableCount">No results</span></div>
+      <div class="table-wrap"><table><thead><tr><th>#</th><th>Video</th><th>Published</th><th>Views</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="5" class="empty">Results appear here.</td></tr></tbody></table></div>
+    </section>
+  </main>
+  <footer>Uses YouTube Data API v3. Credentials and results are not stored.</footer>
+  <script src="app.js"></script>
+</body>
+</html>
