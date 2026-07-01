@@ -13,3 +13,7 @@ Open `http://localhost:8084`. The app requires a YouTube Data API v3 key. The ke
 ## Deploy
 
 The Cloudflare Pages workflow validates the browser smoke test and deploys when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets exist. `CLOUDFLARE_PROJECT_NAME` can override the default project name.
+
+## Credits
+
+See [CREDITS.md](CREDITS.md) for YouTube Data API documentation attribution.
