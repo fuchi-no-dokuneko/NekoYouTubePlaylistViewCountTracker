@@ -1,0 +1,7 @@
+{
+  "repository": "NekoYouTubePlaylistViewCountTracker",
+  "platform": "web",
+  "baseUrl": "https://neko-youtube-playlist-view-count-tracker.pages.dev/",
+  "ipv4Hosts": ["www.googleapis.com"],
+  "timeoutSeconds": 90
+}
