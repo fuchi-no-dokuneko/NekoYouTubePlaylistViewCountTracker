@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src https://www.googleapis.com; img-src 'self' https://i.ytimg.com data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://www.googleapis.com; img-src 'self' https://i.ytimg.com data:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
   <title>Neko Playlist View Tracker</title>
   <link rel="stylesheet" href="styles.css">
@@ -41,7 +41,7 @@
       <div class="table-wrap"><table><thead><tr><th>#</th><th>Video</th><th>Published</th><th>Views</th><th>Status</th></tr></thead><tbody id="rows"><tr><td colspan="5" class="empty">Results appear here.</td></tr></tbody></table></div>
     </section>
   </main>
-  <footer>Uses YouTube Data API v3. Credentials and results are not stored.</footer>
+  <footer>Uses YouTube Data API v3. The last playlist is stored locally; API credentials and results are not stored.</footer>
   <script src="app.js"></script>
 </body>
 </html>

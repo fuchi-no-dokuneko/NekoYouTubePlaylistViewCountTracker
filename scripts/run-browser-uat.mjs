@@ -7,6 +7,8 @@ import {
   appendFile,
   mkdir,
   mkdtemp,
+  readFile,
+  readdir,
   rm,
   stat,
   writeFile,
@@ -20,6 +22,7 @@ const root = process.cwd();
 const reportDirectory = path.join(root, "build", "reports", "browser-uat");
 const testPath = process.argv[3] || "/tests/browser-smoke.html";
 const timeoutMs = Number(process.env.UAT_TIMEOUT_MS || 60_000);
+const minimumCoverage = Number(process.env.MINIMUM_COVERAGE || 95);
 
 const mimeTypes = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -90,6 +93,70 @@ async function startStaticServer() {
     try {
       const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
       let pathname = decodeURIComponent(requestUrl.pathname);
+      if (pathname.startsWith("/test-api/youtube/v3/")) {
+        const endpoint = pathname.slice("/test-api/youtube/v3/".length);
+        const key = requestUrl.searchParams.get("key") || "";
+        if (key === "nonjson-error") {
+          response.writeHead(503, { "Content-Type": "text/plain" }).end("upstream unavailable");
+          return;
+        }
+        if (key === "invalid-json") {
+          response.writeHead(200, { "Content-Type": "application/json" }).end("{broken");
+          return;
+        }
+        if (key === "quota") {
+          response.writeHead(403, { "Content-Type": "application/json" }).end(JSON.stringify({
+            error: { message: "Daily limit reached", errors: [{ reason: "quotaExceeded" }] }
+          }));
+          return;
+        }
+        if (key === "denied") {
+          response.writeHead(401, { "Content-Type": "application/json" }).end(JSON.stringify({ error: { message: "Bad key" } }));
+          return;
+        }
+        if (key === "empty-error") {
+          response.writeHead(500, { "Content-Type": "application/json" }).end("{}");
+          return;
+        }
+        if (endpoint === "playlistItems") {
+          if (key === "bad-items") {
+            response.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+            return;
+          }
+          const playlistId = requestUrl.searchParams.get("playlistId");
+          const pageToken = requestUrl.searchParams.get("pageToken");
+          if (pageToken && playlistId === "PL_PARTIAL0000") {
+            response.writeHead(502, { "Content-Type": "application/json" }).end(JSON.stringify({ error: { message: "Second page failed" } }));
+            return;
+          }
+          if (pageToken === "slow") await sleep(3_000);
+          const firstPage = [
+            { contentDetails: { videoId: "video-1", videoPublishedAt: "2024-01-01T00:00:00Z" }, snippet: { title: "fallback one" } },
+            { contentDetails: { videoId: "video-2" }, snippet: { title: "繁體中文標題" } }
+          ];
+          const secondPage = [{ contentDetails: { videoId: "video-3" }, snippet: {} }];
+          const body = pageToken
+            ? { items: secondPage }
+            : { items: firstPage, nextPageToken: playlistId === "PL_CANCEL0000" ? "slow" : "page-2" };
+          response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(body));
+          return;
+        }
+        if (endpoint === "videos") {
+          if (key === "bad-items") {
+            response.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+            return;
+          }
+          const ids = (requestUrl.searchParams.get("id") || "").split(",");
+          const all = [
+            { id: "video-1", snippet: { title: "=2+3", publishedAt: "2024-02-03T00:00:00Z", thumbnails: { medium: { url: "data:image/gif;base64,R0lGODlhAQABAAAAACw=" } } }, statistics: { viewCount: "1000" }, status: { privacyStatus: "public" } },
+            { id: "video-2", snippet: { title: "繁體中文標題" }, statistics: { viewCount: "25" }, status: {} }
+          ];
+          response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ items: all.filter((item) => ids.includes(item.id)) }));
+          return;
+        }
+        response.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: { message: "Unknown endpoint" } }));
+        return;
+      }
       if (pathname.endsWith("/")) pathname += "index.html";
       const file = path.resolve(root, `.${pathname}`);
       const rootPrefix = `${root}${path.sep}`;
@@ -250,6 +317,10 @@ function lineCoverage(source, ranges, firstLine) {
   return results;
 }
 
+function lineForOffset(source, offset, firstLine) {
+  return firstLine + source.slice(0, offset).split("\n").length;
+}
+
 async function createCoverageReports(client, coverageEntries, scripts, origin) {
   const files = new Map();
 
@@ -267,16 +338,40 @@ async function createCoverageReports(client, coverageEntries, scripts, origin) {
     const metadata = scripts.get(entry.scriptId) || {};
     const ranges = entry.functions.flatMap((item) => item.ranges);
     const lines = lineCoverage(source, ranges, Number(metadata.startLine || 0));
-    const current = files.get(relativePath) || { lines: new Map(), functions: 0, coveredFunctions: 0 };
+    const current = files.get(relativePath) || {
+      lines: new Map(),
+      functions: new Map(),
+      branches: new Map(),
+      executions: [],
+    };
 
     for (const item of lines) {
       current.lines.set(item.line, Math.max(current.lines.get(item.line) || 0, item.count));
     }
     for (const item of entry.functions) {
       if (!item.ranges.length) continue;
-      current.functions += 1;
-      if (item.ranges[0].count > 0) current.coveredFunctions += 1;
+      const rootRange = item.ranges[0];
+      const functionLine = lineForOffset(source, rootRange.startOffset, Number(metadata.startLine || 0));
+      const functionKey = `${functionLine}:${rootRange.startOffset}:${rootRange.endOffset}:${item.functionName}`;
+      const previousFunction = current.functions.get(functionKey);
+      current.functions.set(functionKey, {
+        count: Math.max(previousFunction?.count || 0, rootRange.count),
+        line: functionLine,
+        name: item.functionName || `(anonymous:${functionLine})`,
+      });
+      for (const range of item.ranges.slice(1)) {
+        const branchLine = lineForOffset(source, range.startOffset, Number(metadata.startLine || 0));
+        const branchKey = `${branchLine}:${range.startOffset}:${range.endOffset}`;
+        const previousBranch = current.branches.get(branchKey);
+        current.branches.set(branchKey, {
+          count: Math.max(previousBranch?.count || 0, range.count),
+          endOffset: range.endOffset,
+          line: branchLine,
+          startOffset: range.startOffset,
+        });
+      }
     }
+    current.executions.push(entry.functions.flatMap((item) => item.ranges));
     files.set(relativePath, current);
   }
 
@@ -285,6 +380,8 @@ async function createCoverageReports(client, coverageEntries, scripts, origin) {
   let coveredLines = 0;
   let totalFunctions = 0;
   let coveredFunctions = 0;
+  let totalBranches = 0;
+  let coveredBranches = 0;
   const lcov = [];
   const reportFiles = [];
 
@@ -293,28 +390,60 @@ async function createCoverageReports(client, coverageEntries, scripts, origin) {
     const hitLines = lines.filter(([, count]) => count > 0).length;
     totalLines += lines.length;
     coveredLines += hitLines;
-    totalFunctions += data.functions;
-    coveredFunctions += data.coveredFunctions;
+    const functions = [...data.functions.values()].sort((left, right) => left.line - right.line || left.name.localeCompare(right.name));
+    const branches = [...data.branches.values()]
+      .map((branch) => {
+        const executionCounts = data.executions.map((ranges) => {
+          const containing = ranges
+            .filter((range) => range.startOffset <= branch.startOffset && branch.endOffset <= range.endOffset)
+            .sort((left, right) => (left.endOffset - left.startOffset) - (right.endOffset - right.startOffset));
+          return containing[0]?.count || 0;
+        });
+        return { ...branch, count: Math.max(branch.count, ...executionCounts) };
+      })
+      .sort((left, right) => left.line - right.line);
+    const hitFunctions = functions.filter((item) => item.count > 0).length;
+    const hitBranches = branches.filter((item) => item.count > 0).length;
+    totalFunctions += functions.length;
+    coveredFunctions += hitFunctions;
+    totalBranches += branches.length;
+    coveredBranches += hitBranches;
     reportFiles.push({
       file,
       lines: lines.length,
       coveredLines: hitLines,
-      functions: data.functions,
-      coveredFunctions: data.coveredFunctions,
+      functions: functions.length,
+      coveredFunctions: hitFunctions,
+      branches: branches.length,
+      coveredBranches: hitBranches,
     });
 
     lcov.push("TN:browser-uat", `SF:${file}`);
+    functions.forEach((item, index) => {
+      lcov.push(`FN:${item.line},${item.name}#${index}`, `FNDA:${item.count},${item.name}#${index}`);
+    });
+    lcov.push(`FNF:${functions.length}`, `FNH:${hitFunctions}`);
     for (const [line, count] of lines) lcov.push(`DA:${line},${count}`);
-    lcov.push(`LF:${lines.length}`, `LH:${hitLines}`, "end_of_record");
+    branches.forEach((item, index) => lcov.push(`BRDA:${item.line},0,${index},${item.count}`));
+    lcov.push(
+      `BRF:${branches.length}`,
+      `BRH:${hitBranches}`,
+      `LF:${lines.length}`,
+      `LH:${hitLines}`,
+      "end_of_record"
+    );
   }
 
   await writeFile(path.join(reportDirectory, "lcov.info"), `${lcov.join("\n")}\n`);
   const report = {
+    coveredBranches,
     coveredFunctions,
     coveredLines,
     files: reportFiles,
     functionPercent: totalFunctions ? (coveredFunctions / totalFunctions) * 100 : 0,
+    branchPercent: totalBranches ? (coveredBranches / totalBranches) * 100 : 100,
     linePercent: totalLines ? (coveredLines / totalLines) * 100 : 0,
+    totalBranches,
     totalFunctions,
     totalLines,
   };
@@ -370,14 +499,15 @@ async function writeTestReports(checks, durationMs, resultText, coverage) {
     `- Assertions: **${checks.length - failures}/${checks.length} passed**`,
     `- Application line coverage: **${coverage.linePercent.toFixed(1)}%** (${coverage.coveredLines}/${coverage.totalLines})`,
     `- Application function coverage: **${coverage.functionPercent.toFixed(1)}%** (${coverage.coveredFunctions}/${coverage.totalFunctions})`,
+    `- Application branch coverage: **${coverage.branchPercent.toFixed(1)}%** (${coverage.coveredBranches}/${coverage.totalBranches})`,
     "",
     "| Assertion | Result |",
     "| --- | --- |",
     ...checks.map((check) => `| ${check.name.replaceAll("|", "\\|")} | ${check.passed ? "PASS" : "FAIL"} |`),
     "",
-    "| Covered file | Lines | Functions |",
-    "| --- | ---: | ---: |",
-    ...coverage.files.map((file) => `| ${file.file} | ${file.coveredLines}/${file.lines} | ${file.coveredFunctions}/${file.functions} |`),
+    "| Covered file | Lines | Functions | Branches |",
+    "| --- | ---: | ---: | ---: |",
+    ...coverage.files.map((file) => `| ${file.file} | ${file.coveredLines}/${file.lines} | ${file.coveredFunctions}/${file.functions} | ${file.coveredBranches}/${file.branches} |`),
     "",
   ].join("\n");
   await writeFile(path.join(reportDirectory, "summary.md"), summary);
@@ -388,6 +518,9 @@ async function writeTestReports(checks, durationMs, resultText, coverage) {
 
 async function main() {
   await mkdir(reportDirectory, { recursive: true });
+  const downloadDirectory = path.join(reportDirectory, "downloads");
+  await rm(downloadDirectory, { recursive: true, force: true });
+  await mkdir(downloadDirectory, { recursive: true });
   const browserPath = await findBrowser();
   const server = await startStaticServer();
   const serverPort = server.address().port;
@@ -413,6 +546,7 @@ async function main() {
     const scripts = new Map();
     client.on("Debugger.scriptParsed", (script) => scripts.set(script.scriptId, script));
     await client.call("Page.enable");
+    await client.call("Page.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDirectory });
     await client.call("Runtime.enable");
     await client.call("Debugger.enable");
     await client.call("Profiler.enable");
@@ -443,6 +577,19 @@ async function main() {
     await client.call("Profiler.stopPreciseCoverage");
     const coverage = await createCoverageReports(client, coverageEntries, scripts, new URL(url).origin);
     const checks = parseChecks(resultText);
+    const downloadDeadline = Date.now() + 5_000;
+    let downloadedCsv = "";
+    while (Date.now() < downloadDeadline) {
+      const files = (await readdir(downloadDirectory)).filter((name) => name.endsWith(".csv"));
+      if (files.length) {
+        downloadedCsv = await readFile(path.join(downloadDirectory, files[0]), "utf8");
+        break;
+      }
+      await sleep(50);
+    }
+    checks.push({ name: "real CSV download completed", passed: downloadedCsv.length > 0 });
+    checks.push({ name: "spreadsheet formula title is inert", passed: downloadedCsv.includes('"\'=2+3"') });
+    checks.push({ name: "Unicode title round trips in CSV", passed: downloadedCsv.includes("繁體中文標題") });
     await writeFile(path.join(reportDirectory, "result.txt"), `${resultText}\n`);
     await writeTestReports(checks, Date.now() - startedAt, resultText, coverage);
 
@@ -451,6 +598,13 @@ async function main() {
     if (title !== "PASS" || checks.some((check) => !check.passed)) process.exitCode = 1;
     if (!coverage.totalLines) {
       process.stderr.write("No application coverage was collected\n");
+      process.exitCode = 1;
+    }
+    const coverageDimensions = [coverage.linePercent, coverage.functionPercent, coverage.branchPercent];
+    if (coverageDimensions.some((value) => value < minimumCoverage)) {
+      process.stderr.write(
+        `Coverage line=${coverage.linePercent.toFixed(1)}%, function=${coverage.functionPercent.toFixed(1)}%, branch=${coverage.branchPercent.toFixed(1)}% is below ${minimumCoverage}%\n`
+      );
       process.exitCode = 1;
     }
   } finally {

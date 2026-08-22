@@ -3,15 +3,21 @@ on:
   push:
     branches: [main]
   pull_request:
+
+permissions: {}
+
 jobs:
   validate:
     name: Unit, UAT, and coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
       - name: Check JavaScript syntax
@@ -21,6 +27,7 @@ jobs:
       - name: Verify SonarQube input reports
         run: |
           test -s build/reports/browser-uat/lcov.info
+          test -s build/reports/browser-uat/coverage.json
           test -s build/reports/browser-uat/sonar-test-execution.xml
       - name: Require SonarQube Cloud token
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
@@ -38,17 +45,33 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       - name: Upload test and coverage reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: browser-test-reports
           path: build/reports/browser-uat/
           if-no-files-found: error
+      - name: Prepare tested deployment artifact
+        run: |
+          mkdir dist
+          cp index.html app.js styles.css _headers dist/
+      - name: Upload tested deployment artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cloudflare-site
+          path: dist/
+          if-no-files-found: error
   deploy:
     needs: validate
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: cloudflare-site
+          path: dist
       - id: config
         env:
           TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -57,8 +80,8 @@ jobs:
         run: |
           if [ -n "$TOKEN" ] && [ -n "$ACCOUNT" ]; then echo configured=true >>"$GITHUB_OUTPUT"; echo "project=${PROJECT:-neko-youtube-playlist-view-count-tracker}" >>"$GITHUB_OUTPUT"; else echo configured=false >>"$GITHUB_OUTPUT"; fi
       - if: steps.config.outputs.configured == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy . --project-name=${{ steps.config.outputs.project }}
+          command: pages deploy dist --project-name=${{ steps.config.outputs.project }}

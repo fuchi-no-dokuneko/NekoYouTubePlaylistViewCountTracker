@@ -1,8 +1,153 @@
-<!doctype html><html><head><meta charset="utf-8"><title>RUNNING</title></head><body><iframe id="app" src="../index.html" hidden></iframe><pre id="result">RUNNING</pre><script>
-const frame=document.getElementById("app"); frame.addEventListener("load",()=>{try{const api=frame.contentWindow.NekoPlaylist;const checks=[
-["plain playlist id",api.parsePlaylistId("PL1234567890abc")==="PL1234567890abc"],
-["playlist URL",api.parsePlaylistId("https://www.youtube.com/playlist?list=PL1234567890abc")==="PL1234567890abc"],
-["chart initialized",frame.contentDocument.getElementById("chart").width>0],
-["credentials not stored",!Object.keys(frame.contentWindow.localStorage).length]
-];const ok=checks.every(x=>x[1]);document.getElementById("result").textContent=(ok?"PASS":"FAIL")+"\n"+checks.map(x=>(x[1]?"PASS ":"FAIL ")+x[0]).join("\n");document.title=ok?"PASS":"FAIL"}catch(error){document.getElementById("result").textContent="FAIL\n"+error.stack;document.title="FAIL"}},{once:true});
-</script></body></html>
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>RUNNING</title><style>#app{position:fixed;left:-2000px;top:0;width:1200px;height:900px;border:0}</style></head>
+<body>
+  <iframe id="app" src="../index.html?apiBase=/test-api/youtube/v3/"></iframe>
+  <pre id="result">RUNNING</pre>
+  <script>
+    const frame = document.getElementById("app");
+    const result = document.getElementById("result");
+    const checks = [];
+    const check = (name, passed) => checks.push([name, Boolean(passed)]);
+    const waitFor = async (predicate, timeout = 5000) => {
+      const deadline = Date.now() + timeout;
+      while (Date.now() < deadline) {
+        if (predicate()) return;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error("Timed out waiting for browser state");
+    };
+    const errorMessage = async (work) => {
+      try { await work(); return ""; } catch (error) { return error.message; }
+    };
+
+    frame.addEventListener("load", async () => {
+      try {
+        const view = frame.contentWindow;
+        const doc = frame.contentDocument;
+        const api = view.NekoPlaylist;
+
+        check("plain playlist id", api.parsePlaylistId(" PL1234567890abc ") === "PL1234567890abc");
+        check("playlist URL", api.parsePlaylistId("https://www.youtube.com/playlist?list=PL1234567890abc") === "PL1234567890abc");
+        check("invalid playlist rejected", await errorMessage(() => Promise.resolve(api.parsePlaylistId("bad"))) === "Enter a valid playlist URL or ID.");
+        check("same-origin API fixture selected", api.apiBase().origin === location.origin);
+
+        const nonJson = await errorMessage(() => api.api("playlistItems", {}, "nonjson-error"));
+        const invalidJson = await errorMessage(() => api.api("playlistItems", {}, "invalid-json"));
+        const quota = await errorMessage(() => api.api("playlistItems", {}, "quota"));
+        const denied = await errorMessage(() => api.api("playlistItems", {}, "denied"));
+        const emptyError = await errorMessage(() => api.api("playlistItems", {}, "empty-error"));
+        check("non-JSON HTTP error is specific", /non-JSON error.*503/.test(nonJson));
+        check("invalid success JSON is specific", /invalid JSON.*200/.test(invalidJson));
+        check("quota guidance is specific", /quota exceeded.*403.*Retry/.test(quota));
+        check("ordinary HTTP error includes status", /Bad key.*401/.test(denied));
+        check("HTTP error fallback remains actionable", /request failed.*500/i.test(emptyError));
+        check("missing playlist items rejected", /no items array/.test(await errorMessage(() => api.getPlaylistItems("PL1234567890", "bad-items", new AbortController().signal, () => {}))));
+        check("missing video items rejected", /no items array/.test(await errorMessage(() => api.getVideoDetails(["video-1"], "bad-items", new AbortController().signal, () => {}))));
+
+        check("formula equals neutralized", api.csvCell("=SUM(A1:A2)") === "\"'=SUM(A1:A2)\"");
+        check("formula plus neutralized after spaces", api.safeSpreadsheetValue("  +1") === "'  +1");
+        check("formula minus neutralized", api.safeSpreadsheetValue("-1") === "'-1");
+        check("formula at neutralized", api.safeSpreadsheetValue("@cmd") === "'@cmd");
+        check("null CSV value is empty", api.safeSpreadsheetValue(null) === "");
+        check("normal Unicode preserved", api.csvCell("繁體中文\"標題") === "\"繁體中文\"\"標題\"");
+
+        doc.getElementById("playlist").value = "PL1234567890";
+        doc.getElementById("playlist").dispatchEvent(new Event("change"));
+        check("playlist setting persisted", view.localStorage.getItem("neko-playlist:last-playlist") === "PL1234567890");
+        view.localStorage.removeItem("neko-playlist:last-playlist");
+        api.restorePlaylist();
+        check("missing persisted playlist restores empty", doc.getElementById("playlist").value === "");
+        doc.getElementById("playlist").value = "PL1234567890";
+        api.rememberPlaylist();
+        doc.getElementById("apiKey").value = "test-key";
+        doc.getElementById("load").click();
+        await waitFor(() => !api.state.controller);
+        check("two API pages combined", api.state.records.length === 3);
+        check("complete result is not partial", api.state.partial === false);
+        check("view totals rendered", doc.getElementById("totalViews").textContent === "1,025");
+        check("unavailable video rendered", doc.getElementById("unavailableCount").textContent === "1");
+        check("table rows rendered", doc.querySelectorAll("#rows tr").length === 3);
+        check("thumbnail rendered", Boolean(doc.querySelector("#rows img")));
+        check("export enabled", !doc.getElementById("export").disabled);
+        const canvas = doc.getElementById("chart");
+        const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+        check("real canvas contains painted pixels", pixels.some((value, index) => index % 4 === 3 && value > 0));
+        view.dispatchEvent(new Event("resize"));
+        doc.getElementById("export").click();
+
+        const combined = api.combine(
+          [{ contentDetails: {}, snippet: {} }],
+          new Map()
+        );
+        check("unavailable fallback is explicit", combined[0].title === "Unavailable video" && combined[0].id === "");
+        const itemThumbnail = api.combine([{ contentDetails: { videoId: "x" }, snippet: { thumbnails: { medium: { url: "item-thumb" } } } }], new Map());
+        check("playlist thumbnail fallback retained", itemThumbnail[0].thumbnail === "item-thumb");
+        api.drawChart([
+          { title: "short", views: 1n },
+          { title: "a deliberately long chart title that is truncated", views: 100n }
+        ]);
+        check("long chart label branch rendered", canvas.width > 0);
+        api.render([], false);
+        check("empty chart message branch rendered", doc.getElementById("export").disabled);
+
+        doc.getElementById("playlist").value = "bad";
+        doc.getElementById("apiKey").value = "";
+        doc.getElementById("load").click();
+        await waitFor(() => /valid playlist/.test(doc.getElementById("status").textContent));
+        check("invalid input shown accessibly", doc.getElementById("status").classList.contains("error"));
+        doc.getElementById("playlist").value = "PL1234567890";
+        doc.getElementById("load").click();
+        await waitFor(() => /API key/.test(doc.getElementById("status").textContent));
+        check("missing key is actionable", /Enter a YouTube Data API key/.test(doc.getElementById("status").textContent));
+
+        doc.getElementById("playlist").value = "PL_CANCEL0000";
+        doc.getElementById("apiKey").value = "test-key";
+        doc.getElementById("load").click();
+        await waitFor(() => /requesting next page/.test(doc.getElementById("status").textContent));
+        doc.getElementById("cancel").click();
+        await waitFor(() => !api.state.controller);
+        check("cancellation reported", /cancelled/.test(doc.getElementById("status").textContent));
+        check("cancel retains marked partial rows", api.state.partial && api.state.records.length === 2 && /partial/.test(doc.getElementById("tableCount").textContent));
+        check("cancel controls reset", !doc.getElementById("load").disabled && doc.getElementById("cancel").disabled);
+
+        doc.getElementById("playlist").value = "PL_PARTIAL0000";
+        doc.getElementById("apiKey").value = "test-key";
+        doc.getElementById("load").click();
+        await waitFor(() => !api.state.controller);
+        check("page failure retains marked partial rows", api.state.partial && api.state.records.length === 2);
+        check("page failure names retry state", /Second page failed.*partial/.test(doc.getElementById("status").textContent));
+
+        const secondFrame = document.createElement("iframe");
+        secondFrame.hidden = true;
+        secondFrame.src = "../index.html?apiBase=/test-api/youtube/v3/";
+        document.body.appendChild(secondFrame);
+        await new Promise((resolve) => secondFrame.addEventListener("load", resolve, { once: true }));
+        check("playlist survives reload", secondFrame.contentDocument.getElementById("playlist").value === "PL1234567890");
+        const defaultFrame = document.createElement("iframe");
+        defaultFrame.hidden = true;
+        defaultFrame.src = "../index.html";
+        document.body.appendChild(defaultFrame);
+        await new Promise((resolve) => defaultFrame.addEventListener("load", resolve, { once: true }));
+        check("production API base is Google", defaultFrame.contentWindow.NekoPlaylist.apiBase().hostname === "www.googleapis.com");
+        const rejectedFrame = document.createElement("iframe");
+        rejectedFrame.hidden = true;
+        rejectedFrame.src = "../index.html?apiBase=https://example.invalid/";
+        document.body.appendChild(rejectedFrame);
+        await new Promise((resolve) => rejectedFrame.addEventListener("load", resolve, { once: true }));
+        check("cross-origin custom API rejected", /page's origin/.test(await errorMessage(() => Promise.resolve(rejectedFrame.contentWindow.NekoPlaylist.apiBase()))));
+        check("API key is never persisted", !Object.keys(view.localStorage).some((key) => /key/i.test(key)));
+        check("status uses live-region semantics", doc.getElementById("status").getAttribute("role") === "status");
+        check("controls have labels or names", [...doc.querySelectorAll("input,button")].every((element) => element.labels?.length || element.textContent.trim()));
+
+        const ok = checks.every((item) => item[1]);
+        result.textContent = `${ok ? "PASS" : "FAIL"}\n${checks.map((item) => `${item[1] ? "PASS" : "FAIL"} ${item[0]}`).join("\n")}`;
+        document.title = ok ? "PASS" : "FAIL";
+      } catch (error) {
+        result.textContent = `FAIL\n${error.stack}`;
+        document.title = "FAIL";
+      }
+    }, { once: true });
+  </script>
+</body>
+</html>
